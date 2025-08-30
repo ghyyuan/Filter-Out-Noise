@@ -1,14 +1,4 @@
-(cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF'
-diff --git a/streamlit_app.py b/streamlit_app.py
---- a/streamlit_app.py
-+++ b/streamlit_app.py
-@@ -1,663 +1,665 @@
--# -*- coding: utf-8 -*-
--# Fusion Review Evaluator · v2.1
--# - Sidebar: neon glass style
--# - Single input: "Reference Nearest Matches (Top-3)" naming
--# - Batch: robust invalid_type extraction, includes 'advertisement'
--
+
 -import ast, re, math, hashlib
 -from datetime import datetime, timedelta
 -import numpy as np
