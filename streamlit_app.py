@@ -147,11 +147,12 @@ button[kind="primary"]:hover, .stButton>button:hover, .stDownloadButton>button:h
 # ---------- LLM choices ----------
 LLM_CHOICES = ["Qwen3-8B", "Qwen2.5-14B", "Gemma3-12B", "GPT-4o-mini", "GPT-4o"]
 PROMPTS = {
-    "ver1": "Classify review as valid/invalid (advertisement/irrelevant/rant_no_visit). Be strict with links and unrelated topics.",
-    "ver2": "Focus on experiential evidence. If the user says they haven't visited or cites hearsay, mark as rant_no_visit.",
-    "ver3": "High-precision mode. Only mark valid if the comment clearly describes an on-site experience.",
+    "Zero Shot": "Classify review as valid/invalid (advertisement/irrelevant/rant_no_visit). Be strict with links and unrelated topics.",
+    "Few Shot": "Focus on experiential evidence. If the user says they haven't visited or cites hearsay, mark as rant_no_visit.",
+    "Few Shot + CoT": "High-precision mode. Only mark valid if the comment clearly describes an on-site experience.",
+    "Few Shot + RAG + CoT": "Advanced mode combining retrieval, reasoning, and contextual analysis for optimal accuracy.",
 }
-DEFAULT_PROMPT_KEY = "ver1"
+DEFAULT_PROMPT_KEY = "Zero Shot"
 
 # ---------- Stubs (replace with real model calls) ----------
 def has_link(text:str)->bool:
@@ -341,15 +342,80 @@ def top3_similar(query_text:str, ref_df:pd.DataFrame, text_col:str="text")->list
     sims.sort(key=lambda x:x[1], reverse=True)
     return sims[:3]
 
+# ---------- Natural Language Field Extraction ----------
+def extract_review_fields(natural_input: str) -> dict:
+    """Extract review fields from natural language input"""
+    import re
+    from datetime import datetime
+    
+    fields = {
+        "user_id": "NA",
+        "name": "NA", 
+        "time": "NA",
+        "rating": "NA",
+        "text": "NA",
+        "gmap_id": "NA"
+    }
+    
+    if not natural_input.strip():
+        return fields
+    
+    # Extract user ID (numbers, emails, or @mentions)
+    user_id_match = re.search(r'(?:user[_\s]*id[:\s]*|id[:\s]*|@)([a-zA-Z0-9_@.-]+)', natural_input, re.IGNORECASE)
+    if user_id_match:
+        fields["user_id"] = user_id_match.group(1)
+    
+    # Extract name (after "name:", "by", "from", or quoted)
+    name_match = re.search(r'(?:name[:\s]*|by[:\s]+|from[:\s]+|reviewer[:\s]*)["\']?([A-Za-z\s]{2,30})["\']?', natural_input, re.IGNORECASE)
+    if name_match:
+        fields["name"] = name_match.group(1).strip()
+    
+    # Extract rating (X/5, X stars, X out of 5)
+    rating_match = re.search(r'(?:rating[:\s]*|rated[:\s]*|stars?[:\s]*|score[:\s]*)(\d)[/\s]*(?:out\s*of\s*)?[5\s]*(?:stars?)?', natural_input, re.IGNORECASE)
+    if rating_match:
+        rating = int(rating_match.group(1))
+        if 1 <= rating <= 5:
+            fields["rating"] = rating
+    
+    # Extract time/date
+    time_patterns = [
+        r'(?:time[:\s]*|date[:\s]*|on[:\s]*)(\d{10,13})',  # epoch timestamp
+        r'(?:time[:\s]*|date[:\s]*|on[:\s]*)(\d{4}[-/]\d{1,2}[-/]\d{1,2})',  # date format
+        r'(?:time[:\s]*|date[:\s]*|on[:\s]*)(\d{1,2}[-/]\d{1,2}[-/]\d{4})',  # US date format
+    ]
+    for pattern in time_patterns:
+        time_match = re.search(pattern, natural_input, re.IGNORECASE)
+        if time_match:
+            fields["time"] = time_match.group(1)
+            break
+    
+    # Extract Google Maps ID
+    gmap_match = re.search(r'(?:gmap[_\s]*id[:\s]*|google[_\s]*maps?[_\s]*id[:\s]*|maps?[_\s]*id[:\s]*)([0-9a-fx:]+)', natural_input, re.IGNORECASE)
+    if gmap_match:
+        fields["gmap_id"] = gmap_match.group(1)
+    
+    # Extract review text (everything else, or after "review:", "comment:", "text:")
+    text_match = re.search(r'(?:review[:\s]*|comment[:\s]*|text[:\s]*|says?[:\s]*)["\']?([^"\']+)["\']?', natural_input, re.IGNORECASE)
+    if text_match:
+        fields["text"] = text_match.group(1).strip()
+    else:
+        # If no explicit markers, treat the longest sentence as review text
+        sentences = re.split(r'[.!?]+', natural_input)
+        longest_sentence = max(sentences, key=len, default="").strip()
+        if len(longest_sentence) > 20:  # Reasonable review length
+            fields["text"] = longest_sentence
+    
+    return fields
+
 # ---------- Header ----------
 st.markdown('<div class="hero"><div class="h1">Fusion Review Evaluator</div><div class="sub">Four-stage pipeline · thresholds & model selection</div></div>', unsafe_allow_html=True)
 st.write("")
 
 # ---------- Sidebar (neon groups) ----------
-st.sidebar.markdown('<div class="sb-card"><div class="sb-title">Parameters</div>', unsafe_allow_html=True)
-low_cut  = st.sidebar.slider("Model1 lower invalid cutoff", 0.0, 0.5, 0.20, 0.01)
-high_cut = st.sidebar.slider("Model1 upper valid cutoff",   0.5, 1.0, 0.80, 0.01)
-clip_thr = st.sidebar.slider("Model3 (CLIP) similarity cutoff", 0.0, 1.0, 0.20, 0.01)
+st.sidebar.markdown('<div class="sb-card"><div class="sb-title">Stage2-Parameters</div>', unsafe_allow_html=True)
+low_cut  = st.sidebar.slider("Bert lower invalid threshold", 0.0, 0.5, 0.20, 0.01)
+high_cut = st.sidebar.slider("Bert upper valid threshold",   0.5, 1.0, 0.80, 0.01)
+clip_thr = st.sidebar.slider("Clip similarity threshold", 0.0, 1.0, 0.20, 0.01)
 st.sidebar.markdown('</div>', unsafe_allow_html=True)
 
 st.sidebar.markdown('<div class="sb-card"><div class="sb-title">Model 2 (LLM)</div>', unsafe_allow_html=True)
@@ -359,41 +425,51 @@ st.sidebar.markdown(f"<p style='color:#E0E6FF'>{PROMPTS[prompt_key]}</p>", unsaf
 
 st.sidebar.markdown('</div>', unsafe_allow_html=True)
 
-st.sidebar.markdown('<div class="sb-card"><div class="sb-title">Reference Set (Top-3)</div>', unsafe_allow_html=True)
-ref_csv = st.sidebar.file_uploader("Upload reference CSV (needs 'text')", type=["csv"])
-st.sidebar.markdown('</div>', unsafe_allow_html=True)
-
-if ref_csv is not None:
-    ref_df = pd.read_csv(ref_csv)
-else:
-    ref_df = pd.DataFrame({"text":[
-        "Great staff and the clinic is super clean. Highly recommend.",
-        "Terrible service. I waited 2 hours and nobody came to help.",
-        "Visit my shop at www.bestdeal.com and get promo now!",
-        "I haven't been there but my friend said it's awful.",
-        "The latte art was beautiful and prices were fair.",
-        "Amazing dentist, painless procedure, friendly nurses.",
-    ]})
+# Default reference dataset
+ref_df = pd.DataFrame({"text":[
+    "Great staff and the clinic is super clean. Highly recommend.",
+    "Terrible service. I waited 2 hours and nobody came to help.",
+    "Visit my shop at www.bestdeal.com and get promo now!",
+    "I haven't been there but my friend said it's awful.",
+    "The latte art was beautiful and prices were fair.",
+    "Amazing dentist, painless procedure, friendly nurses.",
+]})
 
 # ---------- Tabs ----------
 tab_single, tab_batch, tab_screenshot = st.tabs(["Single Input", "CSV Batch", "Screenshot Analysis"])
 
 with tab_single:
-    st.markdown("##### Review Input Fields")
-    st.caption("Enter review metrics for each field. Empty values will be automatically filled as NA and may result in invalid classification.")
+    st.markdown("##### Natural Language Review Input")
+    st.caption("Enter review information in natural language. The system will automatically extract fields like user ID, name, rating, etc.")
     
-    # Create input fields for each review component
-    col1, col2 = st.columns(2)
+    # Natural language input
+    default_input = """User ID: 106533466896145407182, Name: Amy VG, Time: 1568748357166, Rating: 5 stars, Review: I can't say I've ever been excited about a dentist visit before but this place changed my mind, Google Maps ID: 0x87ec2394c2cd9d2d:0xd1119cfbee0da6f3"""
     
-    with col1:
-        user_id = st.text_input("User ID", value="106533466896145407182", placeholder="Enter user ID or leave empty for NA")
-        name = st.text_input("Name", value="Amy VG", placeholder="Enter reviewer name or leave empty for NA")
-        time_input = st.text_input("Time (epoch ms)", value="1568748357166", placeholder="Enter timestamp in epoch milliseconds or leave empty for NA")
-        rating = st.number_input("Rating", min_value=1, max_value=5, value=5, step=1)
+    natural_input = st.text_area(
+        "Review Information", 
+        value=default_input,
+        height=150,
+        placeholder="Example: User John Smith rated 4 stars on 2023-01-15, review: Great service and friendly staff, user ID: 12345"
+    )
+    
+    # Extract and display fields
+    if natural_input.strip():
+        extracted_fields = extract_review_fields(natural_input)
         
-    with col2:
-        text = st.text_area("Review Text", value="I can't say I've ever been excited about a dentist visit before...", height=120, placeholder="Enter review text or leave empty for NA")
-        gmap_id = st.text_input("Google Maps ID", value="0x87ec2394c2cd9d2d:0xd1119cfbee0da6f3", placeholder="Enter Google Maps ID or leave empty for NA")
+        st.markdown("#### Extracted Fields")
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.write(f"**User ID:** {extracted_fields['user_id']}")
+            st.write(f"**Name:** {extracted_fields['name']}")
+            st.write(f"**Time:** {extracted_fields['time']}")
+        with col2:
+            st.write(f"**Rating:** {extracted_fields['rating']}")
+            st.write(f"**Google Maps ID:** {extracted_fields['gmap_id']}")
+        
+        st.write(f"**Review Text:** {extracted_fields['text']}")
+        st.markdown('</div>', unsafe_allow_html=True)
     
     # Business image upload for similarity comparison
     st.markdown("##### Business Image Upload")
@@ -403,110 +479,121 @@ with tab_single:
     if business_image:
         st.image(business_image, caption="Uploaded Business Image", width=200)
     
-
-    
     run_one = st.button("Run Analysis", use_container_width=True)
 
     if run_one:
-        # Build review dict from input fields
-        row = {}
-        
-        # Handle each field, set to "NA" if empty and mark as potentially invalid
-        row["user_id"] = user_id.strip() if user_id.strip() else "NA"
-        row["name"] = name.strip() if name.strip() else "NA"
-        row["text"] = text.strip() if text.strip() else "NA"
-        row["gmap_id"] = gmap_id.strip() if gmap_id.strip() else "NA"
-        row["rating"] = rating
-        
-        # Handle time field
-        if time_input.strip():
-            try:
-                row["time"] = int(time_input.strip())
-            except ValueError:
+        # Extract fields from natural language input
+        if not natural_input.strip():
+            st.error("Please enter review information to analyze.")
+        else:
+            extracted_fields = extract_review_fields(natural_input)
+            
+            # Build review dict from extracted fields
+            row = {}
+            row["user_id"] = extracted_fields["user_id"]
+            row["name"] = extracted_fields["name"]
+            row["text"] = extracted_fields["text"]
+            row["gmap_id"] = extracted_fields["gmap_id"]
+            
+            # Handle rating
+            if extracted_fields["rating"] != "NA":
+                row["rating"] = extracted_fields["rating"]
+            else:
+                row["rating"] = "NA"
+            
+            # Handle time field
+            if extracted_fields["time"] != "NA":
+                try:
+                    # Try to convert to int if it looks like epoch timestamp
+                    if extracted_fields["time"].isdigit() and len(extracted_fields["time"]) >= 10:
+                        row["time"] = int(extracted_fields["time"])
+                    else:
+                        row["time"] = extracted_fields["time"]
+                except ValueError:
+                    row["time"] = "NA"
+            else:
                 row["time"] = "NA"
-        else:
-            row["time"] = "NA"
-        
-        # Set default values for pipeline
-        row["user_comment"] = row["text"]
-        row["business_avg_rating"] = 4.2
-        row["lat"] = 37.78
-        row["lon"] = -122.41
-        row["pics"] = []  # Empty pics for now
-        
-        # Check if any critical field is NA
-        critical_fields = ["user_id", "name", "text", "time", "gmap_id"]
-        na_fields = [field for field in critical_fields if row[field] == "NA"]
-        
-        # Run standard pipeline
-        result = run_pipeline_single(row, low_cut, high_cut, clip_thr, model_choice, prompt_key)
-        
-        # Run business image similarity check if image is provided
-        image_result = None
-        if business_image and row["text"] != "NA":
-            image_result = model6_business_image_similarity(row["text"], business_image, 0.6)  # Fixed threshold
-        
-        # Override result if image similarity fails
-        if image_result and image_result[0] == "invalid":
-            result["final"] = {"label": "invalid", "reason": image_result[2]}
-            result["image_similarity"] = {"similarity": image_result[1], "status": "failed"}
-        elif image_result:
-            result["image_similarity"] = {"similarity": image_result[1], "status": "passed"}
-        
-        # Override result if critical NA fields exist
-        if na_fields:
-            result["final"] = {"label": "invalid", "reason": f"missing_fields: {', '.join(na_fields)}"}
-            result["na_fields"] = na_fields
+            
+            # Set default values for pipeline
+            row["user_comment"] = row["text"]
+            row["business_avg_rating"] = 4.2
+            row["lat"] = 37.78
+            row["lon"] = -122.41
+            row["pics"] = []  # Empty pics for now
+            
+            # Check if any critical field is NA
+            critical_fields = ["user_id", "name", "text", "time", "gmap_id"]
+            na_fields = [field for field in critical_fields if row[field] == "NA"]
+            
+            # Run standard pipeline
+            result = run_pipeline_single(row, low_cut, high_cut, clip_thr, model_choice, prompt_key)
+            
+            # Run business image similarity check if image is provided
+            image_result = None
+            if business_image and row["text"] != "NA":
+                image_result = model6_business_image_similarity(row["text"], business_image, 0.6)  # Fixed threshold
+            
+            # Override result if image similarity fails
+            if image_result and image_result[0] == "invalid":
+                result["final"] = {"label": "invalid", "reason": image_result[2]}
+                result["image_similarity"] = {"similarity": image_result[1], "status": "failed"}
+            elif image_result:
+                result["image_similarity"] = {"similarity": image_result[1], "status": "passed"}
+            
+            # Override result if critical NA fields exist
+            if na_fields:
+                result["final"] = {"label": "invalid", "reason": f"missing_fields: {', '.join(na_fields)}"}
+                result["na_fields"] = na_fields
 
-        # Display NA fields warning if any
-        if na_fields:
-            st.warning(f"⚠️ Missing fields detected: {', '.join(na_fields)}. This will result in INVALID classification.")
+            # Display NA fields warning if any
+            if na_fields:
+                st.warning(f"⚠️ Missing fields detected: {', '.join(na_fields)}. This will result in INVALID classification.")
 
-        # --- Reference Nearest Matches (Top-3)
-        st.markdown("#### Reference Nearest Matches (Top-3)")
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        qtext = str(row.get("text") or row.get("user_comment") or "")
-        if qtext and qtext != "NA":
-            sims = top3_similar(qtext, ref_df, text_col="text" if "text" in ref_df.columns else ref_df.columns[0])
-            if not sims:
-                st.caption("No reference samples.")
-            else:
-                for i,(t,s) in enumerate(sims,1):
-                    t_short = (t[:220]+"…") if len(t)>220 else t
-                    st.write(f"**Match {i}** · similarity={s:.3f}")
-                    st.caption(t_short); st.markdown("---")
-        else:
-            st.caption("No text available for similarity matching.")
-        st.markdown('</div>', unsafe_allow_html=True)
-
-        # --- Business Image Similarity (if applicable)
-        if "image_similarity" in result:
-            st.markdown("#### Business Image Similarity")
+            # --- Reference Nearest Matches (Top-3)
+            st.markdown("#### Reference Nearest Matches (Top-3)")
             st.markdown('<div class="card">', unsafe_allow_html=True)
-            img_sim = result["image_similarity"]
-            if img_sim["status"] == "passed":
-                st.success(f"✅ Image-Text similarity: {img_sim['similarity']:.3f} (≥ 0.60)")
+            qtext = str(row.get("text") or row.get("user_comment") or "")
+            if qtext and qtext != "NA":
+                sims = top3_similar(qtext, ref_df, text_col="text" if "text" in ref_df.columns else ref_df.columns[0])
+                if not sims:
+                    st.caption("No reference samples.")
+                else:
+                    for i,(t,s) in enumerate(sims,1):
+                        t_short = (t[:220]+"…") if len(t)>220 else t
+                        st.write(f"**Match {i}** · similarity={s:.3f}")
+                        st.caption(t_short); st.markdown("---")
             else:
-                st.error(f"❌ Image-Text similarity: {img_sim['similarity']:.3f} (< 0.60)")
+                st.caption("No text available for similarity matching.")
             st.markdown('</div>', unsafe_allow_html=True)
 
-        # --- Final Result
-        st.markdown("#### Final Result")
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        final = result["final"]
-        pill = '<span class="pill pill-valid">VALID</span>' if final["label"]=="valid" else '<span class="pill pill-invalid">INVALID</span>'
-        st.markdown(pill, unsafe_allow_html=True)
-        if final["reason"]:
-            st.caption("Reason: "+str(final["reason"]))
-        
-        # Display additional metrics
-        s1 = result.get("s1"); s3 = result.get("s3"); bits = []
-        if s1: bits.append(f"p_valid={s1[1]:.3f}")
-        if s3 and s3[1] is not None: bits.append(f"clip_sim={float(s3[1]):.3f}")
-        if "image_similarity" in result and result["image_similarity"]["similarity"] is not None:
-            bits.append(f"img_sim={result['image_similarity']['similarity']:.3f}")
-        if bits: st.caption(" · ".join(bits))
-        st.markdown('</div>', unsafe_allow_html=True)
+            # --- Business Image Similarity (if applicable)
+            if "image_similarity" in result:
+                st.markdown("#### Business Image Similarity")
+                st.markdown('<div class="card">', unsafe_allow_html=True)
+                img_sim = result["image_similarity"]
+                if img_sim["status"] == "passed":
+                    st.success(f"✅ Image-Text similarity: {img_sim['similarity']:.3f} (≥ 0.60)")
+                else:
+                    st.error(f"❌ Image-Text similarity: {img_sim['similarity']:.3f} (< 0.60)")
+                st.markdown('</div>', unsafe_allow_html=True)
+
+            # --- Final Result
+            st.markdown("#### Final Result")
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            final = result["final"]
+            pill = '<span class="pill pill-valid">VALID</span>' if final["label"]=="valid" else '<span class="pill pill-invalid">INVALID</span>'
+            st.markdown(pill, unsafe_allow_html=True)
+            if final["reason"]:
+                st.caption("Reason: "+str(final["reason"]))
+            
+            # Display additional metrics
+            s1 = result.get("s1"); s3 = result.get("s3"); bits = []
+            if s1: bits.append(f"p_valid={s1[1]:.3f}")
+            if s3 and s3[1] is not None: bits.append(f"clip_sim={float(s3[1]):.3f}")
+            if "image_similarity" in result and result["image_similarity"]["similarity"] is not None:
+                bits.append(f"img_sim={result['image_similarity']['similarity']:.3f}")
+            if bits: st.caption(" · ".join(bits))
+            st.markdown('</div>', unsafe_allow_html=True)
 
 with tab_batch:
     st.markdown("##### Upload CSV")
