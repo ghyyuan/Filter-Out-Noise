@@ -14,6 +14,8 @@ import streamlit as st
 st.set_page_config(page_title="Fusion Review Evaluator", page_icon="✨", layout="wide")
 st.markdown("""
 <style>
+/* 在这里加 CSS 样式 */
+/* 控制 radio 文字变亮 */
 .stSidebar .stRadio label, .sidebar .stRadio label {
     color: #E0E6FF !important;
     font-weight: 500;
