@@ -403,8 +403,7 @@ with tab_single:
     if business_image:
         st.image(business_image, caption="Uploaded Business Image", width=200)
     
-    # Similarity threshold for business image comparison
-    image_similarity_threshold = st.slider("Image-Text Similarity Threshold", 0.0, 1.0, 0.6, 0.01, help="Minimum similarity required between review text and business image")
+
     
     run_one = st.button("Run Analysis", use_container_width=True)
 
@@ -445,7 +444,7 @@ with tab_single:
         # Run business image similarity check if image is provided
         image_result = None
         if business_image and row["text"] != "NA":
-            image_result = model6_business_image_similarity(row["text"], business_image, image_similarity_threshold)
+            image_result = model6_business_image_similarity(row["text"], business_image, 0.6)  # Fixed threshold
         
         # Override result if image similarity fails
         if image_result and image_result[0] == "invalid":
@@ -486,9 +485,9 @@ with tab_single:
             st.markdown('<div class="card">', unsafe_allow_html=True)
             img_sim = result["image_similarity"]
             if img_sim["status"] == "passed":
-                st.success(f"✅ Image-Text similarity: {img_sim['similarity']:.3f} (≥ {image_similarity_threshold:.2f})")
+                st.success(f"✅ Image-Text similarity: {img_sim['similarity']:.3f} (≥ 0.60)")
             else:
-                st.error(f"❌ Image-Text similarity: {img_sim['similarity']:.3f} (< {image_similarity_threshold:.2f})")
+                st.error(f"❌ Image-Text similarity: {img_sim['similarity']:.3f} (< 0.60)")
             st.markdown('</div>', unsafe_allow_html=True)
 
         # --- Final Result
@@ -582,6 +581,15 @@ with tab_batch:
             inv=res[res["final_label"]=="invalid"]["invalid_type"].fillna("unknown")
             cat = inv.replace({"":"unknown"})
             rc=cat.value_counts().sort_values(ascending=False)
+            
+            # Ensure key categories always appear in the chart
+            key_categories = ["irrelevant", "rant_no_visit", "advertisement"]
+            for category in key_categories:
+                if category not in rc.index:
+                    rc[category] = 0
+            
+            # Sort to ensure consistent order with key categories first
+            rc = rc.sort_values(ascending=False)
             figb=px.bar(rc, x=rc.index, y=rc.values, labels={"x":"invalid type","y":"count"})
             figb.update_layout(margin=dict(l=6,r=6,t=6,b=6))
             st.plotly_chart(figb, use_container_width=True)
