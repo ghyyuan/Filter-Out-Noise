@@ -412,17 +412,17 @@ st.markdown('<div class="hero"><div class="h1">Harmonia</div><div class="sub">Fo
 st.write("")
 
 # ---------- Sidebar (neon groups) ----------
+st.sidebar.markdown('<div class="sb-card"><div class="sb-title">Stage2</div>', unsafe_allow_html=True)
+low_cut  = st.sidebar.slider("Fast BERT lower invalid threshold", 0.0, 0.5, 0.20, 0.01)
+high_cut = st.sidebar.slider("Fast BERT upper valid threshold",   0.5, 1.0, 0.80, 0.01)
+clip_thr = st.sidebar.slider("Clip similarity threshold", 0.0, 1.0, 0.20, 0.01)
+st.sidebar.markdown('</div>', unsafe_allow_html=True)
+
 st.sidebar.markdown('<div class="sb-card"><div class="sb-title">Stage3</div>', unsafe_allow_html=True)
 model_choice = st.sidebar.selectbox("Model", LLM_CHOICES, index=0)
 prompt_key   = st.sidebar.radio("Prompt", list(PROMPTS.keys()), index=list(PROMPTS).index(DEFAULT_PROMPT_KEY), horizontal=True)
 st.sidebar.markdown(f"<p style='color:#E0E6FF'>{PROMPTS[prompt_key]}</p>", unsafe_allow_html=True)
 
-st.sidebar.markdown('</div>', unsafe_allow_html=True)
-
-st.sidebar.markdown('<div class="sb-card"><div class="sb-title">ClipSimilarity</div>', unsafe_allow_html=True)
-low_cut  = st.sidebar.slider("Fast BERT lower invalid threshold", 0.0, 0.5, 0.20, 0.01)
-high_cut = st.sidebar.slider("Fast BERT upper valid threshold",   0.5, 1.0, 0.80, 0.01)
-clip_thr = st.sidebar.slider("Clip similarity threshold", 0.0, 1.0, 0.20, 0.01)
 st.sidebar.markdown('</div>', unsafe_allow_html=True)
 
 # Default reference dataset
