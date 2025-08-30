@@ -380,7 +380,7 @@ tab_single, tab_batch, tab_screenshot = st.tabs(["Single Input", "CSV Batch", "S
 
 with tab_single:
     st.markdown("##### Review Input Fields")
-    st.caption("输入各项评论指标，空值将自动填充为NA并可能导致invalid结果")
+    st.caption("Enter review metrics for each field. Empty values will be automatically filled as NA and may result in invalid classification.")
     
     # Create input fields for each review component
     col1, col2 = st.columns(2)
@@ -397,7 +397,7 @@ with tab_single:
     
     # Business image upload for similarity comparison
     st.markdown("##### Business Image Upload")
-    st.caption("上传商家图片用于与评论内容进行相似度比较")
+    st.caption("Upload business image for similarity comparison with review content")
     business_image = st.file_uploader("Upload Business Image", type=['png', 'jpg', 'jpeg'], key="business_img")
     
     if business_image:
@@ -511,7 +511,7 @@ with tab_single:
 
 with tab_batch:
     st.markdown("##### Upload CSV")
-    st.caption("可选列：user_id,name,time(支持 epoch ms),rating,text,pics,resp,gmap_id,business_avg_rating,lat,lon …")
+    st.caption("Optional columns: user_id, name, time (supports epoch ms), rating, text, pics, resp, gmap_id, business_avg_rating, lat, lon, etc.")
     up = st.file_uploader("CSV", type=["csv"])
     use_demo = st.toggle("Use demo data if no CSV", value=True)
 
@@ -594,7 +594,7 @@ with tab_batch:
 
 with tab_screenshot:
     st.markdown("##### Google Review Screenshot Analysis")
-    st.caption("上传Google评论的截图，基于模型判断评论是否有效")
+    st.caption("Upload Google review screenshots and use AI models to determine if the review is valid")
     
     # Screenshot upload section
     st.markdown('<div class="card">', unsafe_allow_html=True)
@@ -625,11 +625,11 @@ with tab_screenshot:
                 # Display specific invalid reason
                 reason = screenshot_result[1]
                 reason_descriptions = {
-                    "fake_review": "检测到虚假评论内容",
-                    "spam_content": "检测到垃圾/广告内容", 
-                    "irrelevant_content": "检测到不相关内容",
-                    "advertisement": "检测到广告内容",
-                    "no_screenshot": "未检测到有效截图"
+                    "fake_review": "Detected fake review content",
+                    "spam_content": "Detected spam/advertisement content", 
+                    "irrelevant_content": "Detected irrelevant content",
+                    "advertisement": "Detected advertisement content",
+                    "no_screenshot": "No valid screenshot detected"
                 }
                 
                 reason_text = reason_descriptions.get(reason, reason)
@@ -655,10 +655,10 @@ with tab_screenshot:
        - **INVALID**: The screenshot has issues (fake content, spam, advertisements, etc.)
     
     **Invalid Categories:**
-    - **fake_review**: 虚假评论内容
-    - **spam_content**: 垃圾/广告内容  
-    - **irrelevant_content**: 不相关内容
-    - **advertisement**: 广告内容
+    - **fake_review**: Fake review content
+    - **spam_content**: Spam/advertisement content  
+    - **irrelevant_content**: Irrelevant content
+    - **advertisement**: Advertisement content
     """)
     st.markdown('</div>', unsafe_allow_html=True)
 
