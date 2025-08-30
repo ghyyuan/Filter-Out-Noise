@@ -226,6 +226,38 @@ def model4_metadata_flags(df:pd.DataFrame)->pd.DataFrame:
                     out.loc[idx,"meta_reason"]=(out.loc[idx,"meta_reason"].replace("","metadata_teleport")+"; metadata_teleport").str.strip("; ")
     return out
 
+# ---------- Screenshot Analysis Models ----------
+def model5_screenshot_analysis(screenshot_image)->tuple[str,str]:
+    """Analyze Google review screenshot and classify as valid/invalid"""
+    if screenshot_image is None:
+        return "invalid", "no_screenshot"
+    
+    # Mock analysis based on image hash
+    image_bytes = screenshot_image.getvalue() if hasattr(screenshot_image, 'getvalue') else b""
+    s = hash_float_0_1(f"screenshot:{len(image_bytes)}")
+    
+    if s < 0.15: return "invalid", "fake_review"
+    if s < 0.25: return "invalid", "spam_content"  
+    if s < 0.35: return "invalid", "irrelevant_content"
+    if s < 0.45: return "invalid", "advertisement"
+    return "valid", ""
+
+def model6_business_image_similarity(review_text:str, business_image, similarity_threshold:float=0.6)->tuple[str,float|None,str]:
+    """Compare review text with business image for consistency"""
+    if business_image is None:
+        return "valid", None, ""
+    
+    # Mock similarity calculation
+    image_bytes = business_image.getvalue() if hasattr(business_image, 'getvalue') else b""
+    text_hash = hash_float_0_1(f"text:{review_text}")
+    image_hash = hash_float_0_1(f"image:{len(image_bytes)}")
+    similarity = abs(text_hash - image_hash)  # Mock similarity score
+    
+    if similarity >= similarity_threshold:
+        return "valid", similarity, ""
+    else:
+        return "invalid", similarity, "image_text_mismatch"
+
 # ---------- Pipeline ----------
 def stage0_rules(text:str)->tuple[str,str]:
     if not str(text or "").strip(): return "invalid","missing_comment"
@@ -344,70 +376,138 @@ else:
     ]})
 
 # ---------- Tabs ----------
-tab_single, tab_batch = st.tabs(["Single Input", "CSV Batch"])
+tab_single, tab_batch, tab_screenshot = st.tabs(["Single Input", "CSV Batch", "Screenshot Analysis"])
 
 with tab_single:
-    st.markdown("##### Paste one review dict/JSON")
-    st.caption("支持包含 user_id/name/time/rating/text/pics/resp/gmap_id 等；time 可为 epoch ms。")
-    default_example = """{
-  'user_id': '106533466896145407182',
-  'name': 'Amy VG',
-  'time': 1568748357166,
-  'rating': 5,
-  'text': "I can't say I've ever been excited about a dentist visit before...",
-  'pics': [{'url': ['https://lh5.googleusercontent.com/p/AF1QipMBzN4BJV9YCObcw_ifNzFPm-u38hO3oimOA8Fb=w150-h150-k-no-p']}],
-  'gmap_id': '0x87ec2394c2cd9d2d:0xd1119cfbee0da6f3'
-}"""
-    data_str = st.text_area("dict / JSON", value=default_example, height=240)
-    run_one = st.button("Run", use_container_width=True)
+    st.markdown("##### Review Input Fields")
+    st.caption("输入各项评论指标，空值将自动填充为NA并可能导致invalid结果")
+    
+    # Create input fields for each review component
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        user_id = st.text_input("User ID", value="106533466896145407182", placeholder="Enter user ID or leave empty for NA")
+        name = st.text_input("Name", value="Amy VG", placeholder="Enter reviewer name or leave empty for NA")
+        time_input = st.text_input("Time (epoch ms)", value="1568748357166", placeholder="Enter timestamp in epoch milliseconds or leave empty for NA")
+        rating = st.number_input("Rating", min_value=1, max_value=5, value=5, step=1)
+        
+    with col2:
+        text = st.text_area("Review Text", value="I can't say I've ever been excited about a dentist visit before...", height=120, placeholder="Enter review text or leave empty for NA")
+        gmap_id = st.text_input("Google Maps ID", value="0x87ec2394c2cd9d2d:0xd1119cfbee0da6f3", placeholder="Enter Google Maps ID or leave empty for NA")
+    
+    # Business image upload for similarity comparison
+    st.markdown("##### Business Image Upload")
+    st.caption("上传商家图片用于与评论内容进行相似度比较")
+    business_image = st.file_uploader("Upload Business Image", type=['png', 'jpg', 'jpeg'], key="business_img")
+    
+    if business_image:
+        st.image(business_image, caption="Uploaded Business Image", width=200)
+    
+    # Similarity threshold for business image comparison
+    image_similarity_threshold = st.slider("Image-Text Similarity Threshold", 0.0, 1.0, 0.6, 0.01, help="Minimum similarity required between review text and business image")
+    
+    run_one = st.button("Run Analysis", use_container_width=True)
 
     if run_one:
-        # parse dict/JSON
-        parsed=None
-        try:
-            parsed=ast.literal_eval(data_str)
-        except Exception:
-            import json
-            try: parsed=json.loads(data_str.replace("'", '"'))
-            except Exception as e: st.error(f"Parse failed: {e}")
-        if isinstance(parsed, dict):
-            row=dict(parsed)
-            if "user_comment" not in row and "text" in row: row["user_comment"]=row["text"]
-            if "business_avg_rating" not in row: row["business_avg_rating"]=4.2
-            if "lat" not in row: row["lat"]=37.78
-            if "lon" not in row: row["lon"]=-122.41
+        # Build review dict from input fields
+        row = {}
+        
+        # Handle each field, set to "NA" if empty and mark as potentially invalid
+        row["user_id"] = user_id.strip() if user_id.strip() else "NA"
+        row["name"] = name.strip() if name.strip() else "NA"
+        row["text"] = text.strip() if text.strip() else "NA"
+        row["gmap_id"] = gmap_id.strip() if gmap_id.strip() else "NA"
+        row["rating"] = rating
+        
+        # Handle time field
+        if time_input.strip():
+            try:
+                row["time"] = int(time_input.strip())
+            except ValueError:
+                row["time"] = "NA"
+        else:
+            row["time"] = "NA"
+        
+        # Set default values for pipeline
+        row["user_comment"] = row["text"]
+        row["business_avg_rating"] = 4.2
+        row["lat"] = 37.78
+        row["lon"] = -122.41
+        row["pics"] = []  # Empty pics for now
+        
+        # Check if any critical field is NA
+        critical_fields = ["user_id", "name", "text", "time", "gmap_id"]
+        na_fields = [field for field in critical_fields if row[field] == "NA"]
+        
+        # Run standard pipeline
+        result = run_pipeline_single(row, low_cut, high_cut, clip_thr, model_choice, prompt_key)
+        
+        # Run business image similarity check if image is provided
+        image_result = None
+        if business_image and row["text"] != "NA":
+            image_result = model6_business_image_similarity(row["text"], business_image, image_similarity_threshold)
+        
+        # Override result if image similarity fails
+        if image_result and image_result[0] == "invalid":
+            result["final"] = {"label": "invalid", "reason": image_result[2]}
+            result["image_similarity"] = {"similarity": image_result[1], "status": "failed"}
+        elif image_result:
+            result["image_similarity"] = {"similarity": image_result[1], "status": "passed"}
+        
+        # Override result if critical NA fields exist
+        if na_fields:
+            result["final"] = {"label": "invalid", "reason": f"missing_fields: {', '.join(na_fields)}"}
+            result["na_fields"] = na_fields
 
-            result=run_pipeline_single(row, low_cut, high_cut, clip_thr, model_choice, prompt_key)
+        # Display NA fields warning if any
+        if na_fields:
+            st.warning(f"⚠️ Missing fields detected: {', '.join(na_fields)}. This will result in INVALID classification.")
 
-            # --- Reference Nearest Matches (Top-3)
-            st.markdown("#### Reference Nearest Matches (Top-3)")
-            st.markdown('<div class="card">', unsafe_allow_html=True)
-            qtext=str(row.get("text") or row.get("user_comment") or "")
-            sims=top3_similar(qtext, ref_df, text_col="text" if "text" in ref_df.columns else ref_df.columns[0])
+        # --- Reference Nearest Matches (Top-3)
+        st.markdown("#### Reference Nearest Matches (Top-3)")
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        qtext = str(row.get("text") or row.get("user_comment") or "")
+        if qtext and qtext != "NA":
+            sims = top3_similar(qtext, ref_df, text_col="text" if "text" in ref_df.columns else ref_df.columns[0])
             if not sims:
                 st.caption("No reference samples.")
             else:
                 for i,(t,s) in enumerate(sims,1):
-                    t_short=(t[:220]+"…") if len(t)>220 else t
+                    t_short = (t[:220]+"…") if len(t)>220 else t
                     st.write(f"**Match {i}** · similarity={s:.3f}")
                     st.caption(t_short); st.markdown("---")
+        else:
+            st.caption("No text available for similarity matching.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        # --- Business Image Similarity (if applicable)
+        if "image_similarity" in result:
+            st.markdown("#### Business Image Similarity")
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            img_sim = result["image_similarity"]
+            if img_sim["status"] == "passed":
+                st.success(f"✅ Image-Text similarity: {img_sim['similarity']:.3f} (≥ {image_similarity_threshold:.2f})")
+            else:
+                st.error(f"❌ Image-Text similarity: {img_sim['similarity']:.3f} (< {image_similarity_threshold:.2f})")
             st.markdown('</div>', unsafe_allow_html=True)
 
-            # --- Final
-            st.markdown("#### Final")
-            st.markdown('<div class="card">', unsafe_allow_html=True)
-            final=result["final"]
-            pill = '<span class="pill pill-valid">VALID</span>' if final["label"]=="valid" else '<span class="pill pill-invalid">INVALID</span>'
-            st.markdown(pill, unsafe_allow_html=True)
-            if final["reason"]:
-                st.caption("Reason: "+str(final["reason"]))
-            s1=result.get("s1"); s3=result.get("s3"); bits=[]
-            if s1: bits.append(f"p_valid={s1[1]:.3f}")
-            if s3 and s3[1] is not None: bits.append(f"clip_sim={float(s3[1]):.3f}")
-            if bits: st.caption(" · ".join(bits))
-            st.markdown('</div>', unsafe_allow_html=True)
-        else:
-            st.error("Input must be a dict or JSON object.")
+        # --- Final Result
+        st.markdown("#### Final Result")
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        final = result["final"]
+        pill = '<span class="pill pill-valid">VALID</span>' if final["label"]=="valid" else '<span class="pill pill-invalid">INVALID</span>'
+        st.markdown(pill, unsafe_allow_html=True)
+        if final["reason"]:
+            st.caption("Reason: "+str(final["reason"]))
+        
+        # Display additional metrics
+        s1 = result.get("s1"); s3 = result.get("s3"); bits = []
+        if s1: bits.append(f"p_valid={s1[1]:.3f}")
+        if s3 and s3[1] is not None: bits.append(f"clip_sim={float(s3[1]):.3f}")
+        if "image_similarity" in result and result["image_similarity"]["similarity"] is not None:
+            bits.append(f"img_sim={result['image_similarity']['similarity']:.3f}")
+        if bits: st.caption(" · ".join(bits))
+        st.markdown('</div>', unsafe_allow_html=True)
 
 with tab_batch:
     st.markdown("##### Upload CSV")
@@ -491,4 +591,74 @@ with tab_batch:
         st.dataframe(res, use_container_width=True)
         st.download_button("Download CSV", res.to_csv(index=False).encode("utf-8"),
                            "fusion_results.csv", "text/csv", use_container_width=True)
+
+with tab_screenshot:
+    st.markdown("##### Google Review Screenshot Analysis")
+    st.caption("上传Google评论的截图，基于模型判断评论是否有效")
+    
+    # Screenshot upload section
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.markdown("**Upload Screenshot**")
+    screenshot_image = st.file_uploader("Upload Google Review Screenshot", type=['png', 'jpg', 'jpeg'], key="screenshot_img")
+    
+    if screenshot_image:
+        st.image(screenshot_image, caption="Uploaded Screenshot", width=400)
+        
+        # Analysis button
+        if st.button("Analyze Screenshot", use_container_width=True):
+            # Run screenshot analysis
+            screenshot_result = model5_screenshot_analysis(screenshot_image)
+            
+            st.markdown("#### Analysis Result")
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            
+            # Display result
+            if screenshot_result[0] == "valid":
+                pill = '<span class="pill pill-valid">VALID</span>'
+                st.markdown(pill, unsafe_allow_html=True)
+                st.success("✅ Screenshot appears to contain a valid Google review")
+            else:
+                pill = '<span class="pill pill-invalid">INVALID</span>'
+                st.markdown(pill, unsafe_allow_html=True)
+                st.error(f"❌ Screenshot is invalid")
+                
+                # Display specific invalid reason
+                reason = screenshot_result[1]
+                reason_descriptions = {
+                    "fake_review": "检测到虚假评论内容",
+                    "spam_content": "检测到垃圾/广告内容", 
+                    "irrelevant_content": "检测到不相关内容",
+                    "advertisement": "检测到广告内容",
+                    "no_screenshot": "未检测到有效截图"
+                }
+                
+                reason_text = reason_descriptions.get(reason, reason)
+                st.caption(f"Invalid Category: **{reason}** - {reason_text}")
+            
+            st.markdown('</div>', unsafe_allow_html=True)
+    else:
+        st.info("📸 Please upload a Google review screenshot to begin analysis")
+    
+    st.markdown('</div>', unsafe_allow_html=True)
+    
+    # Instructions section
+    st.markdown("##### Instructions")
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.markdown("""
+    **How to use Screenshot Analysis:**
+    
+    1. **Take a screenshot** of a Google review from Google Maps or Google Search
+    2. **Upload the image** using the file uploader above
+    3. **Click "Analyze Screenshot"** to run the validation model
+    4. **Review the results:**
+       - **VALID**: The screenshot contains a legitimate Google review
+       - **INVALID**: The screenshot has issues (fake content, spam, advertisements, etc.)
+    
+    **Invalid Categories:**
+    - **fake_review**: 虚假评论内容
+    - **spam_content**: 垃圾/广告内容  
+    - **irrelevant_content**: 不相关内容
+    - **advertisement**: 广告内容
+    """)
+    st.markdown('</div>', unsafe_allow_html=True)
 
