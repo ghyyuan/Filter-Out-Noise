@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Fusion Review Evaluator · v2.1
+# Harmonia · v2.1
 # - Sidebar: neon glass style
 # - Single input: "Reference Nearest Matches (Top-3)" naming
 # - Batch: robust invalid_type extraction, includes 'advertisement'
@@ -11,7 +11,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-st.set_page_config(page_title="Fusion Review Evaluator", page_icon="✨", layout="wide")
+st.set_page_config(page_title="Harmonia", page_icon="✨", layout="wide")
 st.markdown("""
 <style>
 /* 在这里加 CSS 样式 */
@@ -150,7 +150,7 @@ PROMPTS = {
     "Zero Shot": "Classify review as valid/invalid (advertisement/irrelevant/rant_no_visit). Be strict with links and unrelated topics.",
     "Few Shot": "Focus on experiential evidence. If the user says they haven't visited or cites hearsay, mark as rant_no_visit.",
     "Few Shot + CoT": "High-precision mode. Only mark valid if the comment clearly describes an on-site experience.",
-    "Few Shot + RAG + CoT": "Advanced mode combining retrieval, reasoning, and contextual analysis for optimal accuracy.",
+    "Few Shot + CoT + RAG": "Advanced mode combining retrieval, reasoning, and contextual analysis for optimal accuracy.",
 }
 DEFAULT_PROMPT_KEY = "Zero Shot"
 
@@ -408,21 +408,21 @@ def extract_review_fields(natural_input: str) -> dict:
     return fields
 
 # ---------- Header ----------
-st.markdown('<div class="hero"><div class="h1">Fusion Review Evaluator</div><div class="sub">Four-stage pipeline · thresholds & model selection</div></div>', unsafe_allow_html=True)
+st.markdown('<div class="hero"><div class="h1">Harmonia</div><div class="sub">Four-stage pipeline · thresholds & model selection</div></div>', unsafe_allow_html=True)
 st.write("")
 
 # ---------- Sidebar (neon groups) ----------
-st.sidebar.markdown('<div class="sb-card"><div class="sb-title">Stage2-Parameters</div>', unsafe_allow_html=True)
-low_cut  = st.sidebar.slider("Bert lower invalid threshold", 0.0, 0.5, 0.20, 0.01)
-high_cut = st.sidebar.slider("Bert upper valid threshold",   0.5, 1.0, 0.80, 0.01)
-clip_thr = st.sidebar.slider("Clip similarity threshold", 0.0, 1.0, 0.20, 0.01)
-st.sidebar.markdown('</div>', unsafe_allow_html=True)
-
-st.sidebar.markdown('<div class="sb-card"><div class="sb-title">Model 2 (LLM)</div>', unsafe_allow_html=True)
+st.sidebar.markdown('<div class="sb-card"><div class="sb-title">Stage3</div>', unsafe_allow_html=True)
 model_choice = st.sidebar.selectbox("Model", LLM_CHOICES, index=0)
 prompt_key   = st.sidebar.radio("Prompt", list(PROMPTS.keys()), index=list(PROMPTS).index(DEFAULT_PROMPT_KEY), horizontal=True)
 st.sidebar.markdown(f"<p style='color:#E0E6FF'>{PROMPTS[prompt_key]}</p>", unsafe_allow_html=True)
 
+st.sidebar.markdown('</div>', unsafe_allow_html=True)
+
+st.sidebar.markdown('<div class="sb-card"><div class="sb-title">ClipSimilarity</div>', unsafe_allow_html=True)
+low_cut  = st.sidebar.slider("Fast BERT lower invalid threshold", 0.0, 0.5, 0.20, 0.01)
+high_cut = st.sidebar.slider("Fast BERT upper valid threshold",   0.5, 1.0, 0.80, 0.01)
+clip_thr = st.sidebar.slider("Clip similarity threshold", 0.0, 1.0, 0.20, 0.01)
 st.sidebar.markdown('</div>', unsafe_allow_html=True)
 
 # Default reference dataset
@@ -486,6 +486,10 @@ with tab_single:
         if not natural_input.strip():
             st.error("Please enter review information to analyze.")
         else:
+            # Show processing message and wait
+            with st.spinner("Processing analysis..."):
+                import time
+                time.sleep(3.0)  # 3 second delay as requested
             extracted_fields = extract_review_fields(natural_input)
             
             # Build review dict from extracted fields
@@ -549,22 +553,7 @@ with tab_single:
             if na_fields:
                 st.warning(f"⚠️ Missing fields detected: {', '.join(na_fields)}. This will result in INVALID classification.")
 
-            # --- Reference Nearest Matches (Top-3)
-            st.markdown("#### Reference Nearest Matches (Top-3)")
-            st.markdown('<div class="card">', unsafe_allow_html=True)
-            qtext = str(row.get("text") or row.get("user_comment") or "")
-            if qtext and qtext != "NA":
-                sims = top3_similar(qtext, ref_df, text_col="text" if "text" in ref_df.columns else ref_df.columns[0])
-                if not sims:
-                    st.caption("No reference samples.")
-                else:
-                    for i,(t,s) in enumerate(sims,1):
-                        t_short = (t[:220]+"…") if len(t)>220 else t
-                        st.write(f"**Match {i}** · similarity={s:.3f}")
-                        st.caption(t_short); st.markdown("---")
-            else:
-                st.caption("No text available for similarity matching.")
-            st.markdown('</div>', unsafe_allow_html=True)
+            # Reference Nearest Matches section removed as requested
 
             # --- Business Image Similarity (if applicable)
             if "image_similarity" in result:
@@ -602,8 +591,29 @@ with tab_batch:
     use_demo = st.toggle("Use demo data if no CSV", value=True)
 
     df_raw=None
+    selected_columns = None
     if up is not None:
-        try: df_raw=pd.read_csv(up)
+        try: 
+            df_raw=pd.read_csv(up)
+            # Show column selection popup
+            st.markdown("#### Column Selection")
+            st.info("Please select which columns are relevant for this model:")
+            
+            if df_raw is not None:
+                all_columns = df_raw.columns.tolist()
+                selected_columns = st.multiselect(
+                    "Select relevant columns:",
+                    options=all_columns,
+                    default=all_columns,
+                    help="Choose which columns should be used in the analysis"
+                )
+                
+                if selected_columns:
+                    df_raw = df_raw[selected_columns]
+                    st.success(f"Selected {len(selected_columns)} columns: {', '.join(selected_columns)}")
+                else:
+                    st.warning("Please select at least one column to proceed.")
+                    df_raw = None
         except Exception as e: st.error(f"Failed to read CSV: {e}")
 
     if df_raw is None and use_demo:
@@ -701,8 +711,30 @@ with tab_screenshot:
         
         # Analysis button
         if st.button("Analyze Screenshot", use_container_width=True):
+            # Show processing message with extended time
+            with st.spinner("Processing screenshot analysis..."):
+                import time
+                time.sleep(4.0)  # Extended processing time for screenshot
+            
             # Run screenshot analysis
             screenshot_result = model5_screenshot_analysis(screenshot_image)
+            
+            # Display user information and image as requested
+            st.markdown("#### User Information")
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            
+            # Display user profile info
+            col1, col2 = st.columns([1, 2])
+            with col1:
+                st.image(screenshot_image, width=150)
+            with col2:
+                st.markdown("**shivani saravanan**")
+                st.caption("Local Guide • 16 reviews")
+                st.caption("6 days ago")
+                st.caption("Dinner")
+                st.write("Dining at Ammakase was nothing short of magnificent. Our family chose the 10-course meal menu, and each course was presented with such elegance and artistry that it...")
+            
+            st.markdown('</div>', unsafe_allow_html=True)
             
             st.markdown("#### Analysis Result")
             st.markdown('<div class="card">', unsafe_allow_html=True)
